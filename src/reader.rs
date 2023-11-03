@@ -29,6 +29,7 @@ pub struct AsyncProstReader<R, T, D> {
     into: PhantomData<T>,
     dest: PhantomData<D>,
 }
+
 impl<R, T, D> Unpin for AsyncProstReader<R, T, D> where R: Unpin {}
 
 impl<R, T, D> AsyncProstReader<R, T, D> {
@@ -86,12 +87,14 @@ where
     type Item = Result<T, io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // FIXME: what 5 means here?
-        if let FillResult::Eof = ready!(self.as_mut().fill(cx, 5))? {
+        if let FillResult::Eof = ready!(self.as_mut().fill(cx, LEN_SIZE))? {
             return Poll::Ready(None);
         }
 
         let message_size = NetworkEndian::read_u32(&self.buffer[..LEN_SIZE]) as usize;
+        if message_size == 0 {
+            return Poll::Ready(None);
+        }
 
         // since self.buffer.len() >= 4, we know that we can't get a clean EOF here
         ready!(self.as_mut().fill(cx, message_size + LEN_SIZE))?;
@@ -112,8 +115,7 @@ where
     type Item = Result<T, io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // FIXME: what 5 means here?
-        if let FillResult::Eof = ready!(self.as_mut().fill(cx, LEN_SIZE + 1))? {
+        if let FillResult::Eof = ready!(self.as_mut().fill(cx, LEN_SIZE))? {
             return Poll::Ready(None);
         }
 
@@ -121,6 +123,10 @@ where
         let header_size = size >> 24;
         let body_size = 0x00ffffff & size;
         let message_size = header_size + body_size;
+
+        if message_size == 0 {
+            return Poll::Ready(None);
+        }
 
         // since self.buffer.len() >= 4, we know that we can't get a clean EOF here
         ready!(self.as_mut().fill(cx, message_size + LEN_SIZE))?;
